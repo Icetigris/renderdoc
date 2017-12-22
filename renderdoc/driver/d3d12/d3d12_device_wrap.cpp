@@ -1568,8 +1568,98 @@ bool WrappedID3D12Device::Serialise_CreateReservedResource(
     SerialiserType &ser, const D3D12_RESOURCE_DESC *pDesc, D3D12_RESOURCE_STATES InitialState,
     const D3D12_CLEAR_VALUE *pOptimizedClearValue, REFIID riid, void **ppvResource)
 {
-  D3D12NOTIMP("Tiled Resources");
+  RDCWARN("Serialise_CreateReservedResource() kinda works?");
   APIProps.SparseResources = true;
+  SERIALISE_ELEMENT_LOCAL(Descriptor, *pDesc).Named("pDesc");
+  SERIALISE_ELEMENT(InitialState);
+  SERIALISE_ELEMENT_OPT(pOptimizedClearValue);
+  SERIALISE_ELEMENT_LOCAL(guid, riid).Named("riid");
+  SERIALISE_ELEMENT_LOCAL(pResource, ((WrappedID3D12Resource *)*ppvResource)->GetResourceID());
+
+  SERIALISE_ELEMENT_LOCAL(gpuAddress, ((WrappedID3D12Resource *)*ppvResource)->GetGPUVirtualAddress())
+      .Hidden();
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+    {
+      GPUAddressRange range;
+      range.start = gpuAddress;
+      range.end = gpuAddress + Descriptor.Width;
+      range.id = pResource;
+
+      m_GPUAddresses.AddTo(range);
+    }
+
+    APIProps.YUVTextures |= IsYUVFormat(Descriptor.Format);
+
+    // always allow SRVs on replay so we can inspect resources
+    Descriptor.Flags &= ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+
+    ID3D12Resource *ret = NULL;
+    HRESULT hr =
+        m_pDevice->CreateReservedResource(&Descriptor, InitialState, pOptimizedClearValue, guid,
+                                         (void **)&ret);
+
+    if(FAILED(hr))
+    {
+        RDCERR("Failed on resource serialise-creation, HRESULT: %s", ToStr(hr).c_str());
+        return false;
+    }
+    else
+    {
+      SetObjName(ret, StringFormat::Fmt("Reserved Resource %s ID %llu",
+                                        ToStr(Descriptor.Dimension).c_str(), pResource));
+
+      ret = new WrappedID3D12Resource(ret, this);
+
+      GetResourceManager()->AddLiveResource(pResource, ret);
+
+      SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
+      states.resize(GetNumSubresources(m_pDevice, &Descriptor), InitialState);
+    }
+
+    ResourceType type = ResourceType::Texture;
+    const char *prefix = "Texture";
+
+    if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+    {
+      type = ResourceType::Buffer;
+      prefix = "Buffer";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE1D)
+    {
+      prefix = Descriptor.DepthOrArraySize > 1 ? "1D TextureArray" : "1D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "1D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "1D Depth Target";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D)
+    {
+      prefix = Descriptor.DepthOrArraySize > 1 ? "2D TextureArray" : "2D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "2D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "2D Depth Target";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+    {
+      prefix = "3D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "3D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "3D Depth Target";
+    }
+
+    AddResource(pResource, type, prefix);
+  }
+
   return true;
 }
 
@@ -1578,9 +1668,60 @@ HRESULT WrappedID3D12Device::CreateReservedResource(const D3D12_RESOURCE_DESC *p
                                                     const D3D12_CLEAR_VALUE *pOptimizedClearValue,
                                                     REFIID riid, void **ppvResource)
 {
-  D3D12NOTIMP("Tiled Resources");
-  return m_pDevice->CreateReservedResource(pDesc, InitialState, pOptimizedClearValue, riid,
-                                           ppvResource);
+  RDCLOG("CreateReservedResource() works now lol");
+  if(ppvResource == NULL)
+    return m_pDevice->CreateReservedResource(pDesc, InitialState, pOptimizedClearValue, riid, NULL);
+
+  if(riid != __uuidof(ID3D12Resource))
+    return E_NOINTERFACE;
+
+  ID3D12Resource *real = NULL;
+  HRESULT ret = m_pDevice->CreateReservedResource(pDesc, InitialState, pOptimizedClearValue, riid,
+                                                  (void **)&real);
+
+  if(SUCCEEDED(ret))
+  {
+    WrappedID3D12Resource *wrapped = new WrappedID3D12Resource(real, this);
+
+    if(IsCaptureMode(m_State))
+    {
+      CACHE_THREAD_SERIALISER();
+
+	  SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateReservedResource);
+      Serialise_CreateReservedResource(ser, pDesc, InitialState, pOptimizedClearValue,
+                                       riid, (void **)&wrapped);
+
+      D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
+      record->type = Resource_Resource;
+      record->Length = 0;
+      wrapped->SetResourceRecord(record);
+
+      record->AddChunk(scope.Get());
+
+      {
+        SCOPED_LOCK(m_CapTransitionLock);
+        if(IsActiveCapturing(m_State))
+          GetResourceManager()->MarkDirtyResource(wrapped->GetResourceID());
+        else
+          GetResourceManager()->MarkPendingDirty(wrapped->GetResourceID());
+      }
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
+    }
+
+    {
+      SCOPED_LOCK(m_ResourceStatesLock);
+      SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
+
+      states.resize(GetNumSubresources(m_pDevice, pDesc), InitialState);
+    }
+
+    *ppvResource = (ID3D12Resource *)wrapped;
+  }
+
+  return ret;
 }
 
 template <typename SerialiserType>

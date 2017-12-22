@@ -276,9 +276,163 @@ DECLARE_REFLECTION_STRUCT(DynamicDescriptorCopy);
 
 struct D3D12ResourceRecord;
 
+struct TileMapping
+{
+  // this is mappings into a single heap
+  // a single resource can have more than one of these
+  // because ReservedResources can point to multiple heaps
+
+  // resource stuff
+  UINT NumResourceRegions;
+
+  // D3D12_TILED_RESOURCE_COORDINATE pResourceRegionStartCoordinates[NumResourceRegions];
+  //vector<D3D12_TILED_RESOURCE_COORDINATE> resourceRegionStartCoords;
+  D3D12_TILED_RESOURCE_COORDINATE* resourceRegionStartCoords;
+
+  // D3D12_TILE_REGION_SIZE pResourceRegionSizes[NumResourceRegions];
+  //vector<D3D12_TILE_REGION_SIZE> resourceRegionSizes;
+  D3D12_TILE_REGION_SIZE* resourceRegionSizes;
+
+  // heap stuff
+  //ID3D12Heap *pHeap; //needed? make a hash where heap ptr is key and this struct is value
+
+  UINT NumRanges;
+
+  // D3D12_TILE_RANGE_FLAGS pRangeFlags[NumRanges];
+  //vector<D3D12_TILE_RANGE_FLAGS> rangeFlags;
+  D3D12_TILE_RANGE_FLAGS* rangeFlags;
+
+  // UINT pHeapRangeStartOffsets[NumRanges];
+  //vector<UINT> heapRangeStarts;
+  UINT* heapRangeStarts;
+
+  // UINT pRangeTileCounts[NumRanges];
+  //vector<UINT> rangeTileCounts;
+  UINT* rangeTileCounts;
+
+  //flags for this mapping (only supported one is D3D12_TILE_MAPPING_FLAG_NONE so [shrug]
+  D3D12_TILE_MAPPING_FLAGS Flags;
+
+  /* 
+  ID3D12Resource *pResource, 
+  UINT NumResourceRegions,
+    const D3D12_TILED_RESOURCE_COORDINATE *pResourceRegionStartCoordinates,
+    const D3D12_TILE_REGION_SIZE *pResourceRegionSizes, ID3D12Heap *pHeap, UINT NumRanges,
+    const D3D12_TILE_RANGE_FLAGS *pRangeFlags, const UINT *pHeapRangeStartOffsets,
+    const UINT *pRangeTileCounts, D3D12_TILE_MAPPING_FLAGS Flags
+  
+  Clearing an entire surface's mappings to NULL
+  // - NULL for pResourceRegionStartCoordinates and pResourceRegionSizes defaults to the entire resource
+// - NULL for pHeapRangeStartOffsets since it isn't needed for mapping tiles to NULL
+// - NULL for pRangeTileCounts when NumRanges is 1 defaults to the same number of tiles as the resource region (which is
+//   the entire surface in this case)
+//
+UINT RangeFlags = D3D12_TILE_RANGE_FLAG_NULL;
+pCommandQueue->UpdateTileMappings(pResource, 1, NULL, NULL, NULL, 1, &RangeFlags, NULL, NULL, D3D12_TILE_MAPPING_FLAG_NONE);
+  
+  */
+  
+  //init to null mappings for arg-less constructor
+  TileMapping() : 
+	  NumResourceRegions(1), resourceRegionStartCoords(NULL), resourceRegionSizes(NULL),
+	  NumRanges(1), rangeFlags(NULL), heapRangeStarts(NULL), rangeTileCounts(NULL), Flags(D3D12_TILE_MAPPING_FLAG_NONE)
+  {}
+
+  TileMapping(UINT inNumResourceRegions, const D3D12_TILED_RESOURCE_COORDINATE* inResourceRegionStartCoordinates,
+      const D3D12_TILE_REGION_SIZE* inResourceRegionSizes, UINT inNumRanges,
+      const D3D12_TILE_RANGE_FLAGS* inRangeFlags, const UINT* inHeapRangeStartOffsets,
+      const UINT* inRangeTileCounts, D3D12_TILE_MAPPING_FLAGS inFlags=D3D12_TILE_MAPPING_FLAG_NONE)
+      : NumResourceRegions(inNumResourceRegions), NumRanges(inNumRanges), Flags(inFlags)
+  {
+      resourceRegionStartCoords = new D3D12_TILED_RESOURCE_COORDINATE[NumResourceRegions];
+      resourceRegionSizes = new D3D12_TILE_REGION_SIZE[NumResourceRegions];
+
+	  memcpy(resourceRegionStartCoords, inResourceRegionStartCoordinates, sizeof(D3D12_TILED_RESOURCE_COORDINATE) * NumResourceRegions);
+	  memcpy(resourceRegionSizes, inResourceRegionSizes, sizeof(D3D12_TILE_REGION_SIZE) * NumResourceRegions);
+
+	  rangeFlags = new D3D12_TILE_RANGE_FLAGS[NumRanges];
+	  heapRangeStarts = new UINT[NumRanges];
+	  rangeTileCounts = new UINT[NumRanges];
+
+	  memcpy(rangeFlags, inRangeFlags, sizeof(D3D12_TILE_RANGE_FLAGS) * NumRanges);
+	  memcpy(heapRangeStarts, inHeapRangeStartOffsets, sizeof(UINT) * NumRanges);
+	  memcpy(rangeTileCounts, inRangeTileCounts, sizeof(UINT) * NumRanges);
+  }
+
+  ~TileMapping()
+  {
+	  delete resourceRegionStartCoords;
+	  delete resourceRegionSizes;
+	  delete rangeFlags;
+	  delete heapRangeStarts;
+	  delete rangeTileCounts;
+  }
+};
+
+// this is for managing our own memory for tiled/reserved resources
+struct ReservedResource
+{
+  // tile size in pixels (width x height x depth)
+  // get from GetResourceTiling()
+  D3D12_TILE_SHAPE tileSize;
+
+  D3D12_RESOURCE_DESC desc;
+  D3D12_RESOURCE_STATES state;
+  D3D12_CLEAR_VALUE clearVal;
+
+  //set<TileMapping *> mappings;
+  map<ID3D12Heap*, TileMapping&> mappings;
+
+  ReservedResource(){}
+  ReservedResource(D3D12_RESOURCE_DESC inDesc, D3D12_RESOURCE_STATES inState,
+                   D3D12_CLEAR_VALUE inClearVal)
+      : desc(inDesc),
+        state(inState),
+        clearVal(inClearVal)
+  {
+    // init the mappings with null mappings?
+  }
+
+  void Update(UINT NumResourceRegions,
+              const D3D12_TILED_RESOURCE_COORDINATE *pResourceRegionStartCoordinates,
+              const D3D12_TILE_REGION_SIZE *pResourceRegionSizes, ID3D12Heap *pHeap, UINT NumRanges,
+              const D3D12_TILE_RANGE_FLAGS *pRangeFlags, const UINT *pHeapRangeStartOffsets,
+              const UINT *pRangeTileCounts, D3D12_TILE_MAPPING_FLAGS Flags)
+  {
+    // this gets called when we use UpdateTileMappings.
+
+    // check the inputs to see if we're updating to non-null mappings
+
+    // if it is null, clear the mappings
+    if (pHeap == NULL)
+    {
+      mappings.clear();
+    }
+
+    // probably should just destroy and recreate mappings on the same heap
+    // heap pointer should be the key?
+
+	// if we have start coords, but no region sizes
+    if(pResourceRegionStartCoordinates != NULL && pResourceRegionSizes == NULL)
+    {
+      // the region size defaults to 1 tile for all regions.
+    }
+
+    // Each given tile range can specify one of a few types of ranges:
+    // a range of tiles in a heap (default), (D3D12_TILE_RANGE_FLAG_NONE)
+    // num reserved resource tiles to map to 1 heap tile (D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE)
+    // # tile mappings in the reserved resource to skip/leave unchanged (D3D12_TILE_RANGE_FLAG_SKIP)
+    // a count of tiles in the heap to map to NULL. (D3D12_TILE_RANGE_FLAG_NULL)
+  }
+};
+
 struct CmdListRecordingInfo
 {
   vector<D3D12_RESOURCE_BARRIER> barriers;
+
+  // tiled resources referenced by this command buffer (at submit time
+  // need to go through the tile mappings and reference all memory)
+  set<ReservedResource *> tiledResources;
 
   // a list of all resources dirtied by this command list
   set<ResourceId> dirtied;

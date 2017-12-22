@@ -34,7 +34,40 @@ bool WrappedID3D12CommandQueue::Serialise_UpdateTileMappings(
     const D3D12_TILE_RANGE_FLAGS *pRangeFlags, const UINT *pHeapRangeStartOffsets,
     const UINT *pRangeTileCounts, D3D12_TILE_MAPPING_FLAGS Flags)
 {
-  D3D12NOTIMP("Tiled Resources");
+  // D3D12NOTIMP("Tiled Resources");
+  RDCWARN("Serialise_UpdateTileMappings() doesn't work yet lol");
+  SERIALISE_ELEMENT(pResource);
+
+  // The number of reserved resource regions.
+  SERIALISE_ELEMENT(NumResourceRegions);
+
+  // D3D12_TILED_RESOURCE_COORDINATE pResourceRegionStartCoordinates[NumResourceRegions];
+  //SERIALISE_ELEMENT(bool, HasStartCoords, pResourceRegionStartCoordinates != NULL);
+  SERIALISE_ELEMENT_ARRAY(pResourceRegionStartCoordinates, NumResourceRegions); //optional
+
+  // D3D12_TILE_REGION_SIZE pResourceRegionSizes[NumResourceRegions];
+  //SERIALISE_ELEMENT(bool, HasRegionSizes, pResourceRegionSizes != NULL);
+  SERIALISE_ELEMENT_ARRAY(pResourceRegionSizes, NumResourceRegions); //optional
+
+  // A pointer to the resource heap.
+  SERIALISE_ELEMENT(pHeap); //optional
+
+  // The number of tile ranges.
+  // D3D12_TILE_RANGE_FLAGS pRangeFlags[NumRanges];
+  SERIALISE_ELEMENT_ARRAY(pRangeFlags, NumRanges); //optional
+
+  // An array of offsets into the resource heap. These are 0-based tile offsets, counting in tiles
+  // (not bytes).
+  // UINT pHeapRangeStartOffsets[NumRanges];
+  SERIALISE_ELEMENT_ARRAY(pHeapRangeStartOffsets, NumRanges); //optional
+
+  // UINT pRangeTileCounts[NumRanges];
+  SERIALISE_ELEMENT_ARRAY(pRangeTileCounts, NumRanges); //optional
+
+  SERIALISE_ELEMENT(Flags);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
   return true;
 }
 
@@ -45,10 +78,51 @@ void STDMETHODCALLTYPE WrappedID3D12CommandQueue::UpdateTileMappings(
     const D3D12_TILE_RANGE_FLAGS *pRangeFlags, const UINT *pHeapRangeStartOffsets,
     const UINT *pRangeTileCounts, D3D12_TILE_MAPPING_FLAGS Flags)
 {
-  D3D12NOTIMP("Tiled Resources");
-  m_pReal->UpdateTileMappings(Unwrap(pResource), NumResourceRegions, pResourceRegionStartCoordinates,
+  // D3D12NOTIMP("Tiled Resources");
+  RDCWARN("UpdateTileMappings() doesn't work yet lol");
+  SERIALISE_TIME_CALL(m_pReal->UpdateTileMappings(
+                              Unwrap(pResource), NumResourceRegions, pResourceRegionStartCoordinates,
                               pResourceRegionSizes, Unwrap(pHeap), NumRanges, pRangeFlags,
-                              pHeapRangeStartOffsets, pRangeTileCounts, Flags);
+                              pHeapRangeStartOffsets, pRangeTileCounts, Flags));
+  
+  // if we're capturing and actually writing a frame
+  // save the current tile mappings state from our internal resource tracking
+  if(IsActiveCapturing(m_State))
+  {
+    WriteSerialiser &ser = GetThreadSerialiser();
+    SCOPED_SERIALISE_CHUNK(D3D12Chunk::Queue_UpdateTileMappings);
+    Serialise_UpdateTileMappings(ser,
+        Unwrap(pResource), NumResourceRegions, pResourceRegionStartCoordinates, pResourceRegionSizes,
+        Unwrap(pHeap), NumRanges, pRangeFlags, pHeapRangeStartOffsets, pRangeTileCounts, Flags);
+
+    m_QueueRecord->AddChunk(scope.Get());
+    // mark any resources as referenced
+  }
+
+  // if we're hooked into an app to capture
+  // keep track of tile mappings in our internal memory tracking
+  if(IsCaptureMode(m_State))
+  {
+    // map one or more ranges of resource tiles to one or more ranges of heap tiles
+    // a resource has a bunch of its own regions with start coords and sizes
+    // a heap has ranges of tiles with start offsets, sizes, and flags
+
+    // for each resource region
+    for(UINT i = 0; i < NumResourceRegions; i++)
+    {
+      // D3D12_TILED_RESOURCE_COORDINATE curCoord = pResourceRegionStartCoordinates[i]; //turgle
+      // from region start coord to region size
+      // from start coord x to region size width
+      // from start coord y to region size height
+      // from start coord z to region size depth
+
+      // for each tile range in the heap
+      for(UINT j = 0; j < NumRanges; j++)
+      {
+        // update our internal page tables
+      }
+    }
+  }
 }
 
 template <typename SerialiserType>
@@ -58,7 +132,16 @@ bool WrappedID3D12CommandQueue::Serialise_CopyTileMappings(
     const D3D12_TILED_RESOURCE_COORDINATE *pSrcRegionStartCoordinate,
     const D3D12_TILE_REGION_SIZE *pRegionSize, D3D12_TILE_MAPPING_FLAGS Flags)
 {
-  D3D12NOTIMP("Tiled Resources");
+  // D3D12NOTIMP("Tiled Resources");
+//   RDCWARN("Serialise_CopyTileMappings() doesn't work yet lol");
+//   SERIALISE_ELEMENT(pDstResource);
+//   SERIALISE_ELEMENT(pDstRegionStartCoordinate);
+//   SERIALISE_ELEMENT(pSrcResource);
+//   SERIALISE_ELEMENT(pSrcRegionStartCoordinate);
+//   SERIALISE_ELEMENT(pRegionSize);
+//   SERIALISE_ELEMENT(Flags);
+//   SERIALISE_CHECK_READ_ERRORS();
+
   return true;
 }
 
@@ -67,9 +150,9 @@ void STDMETHODCALLTYPE WrappedID3D12CommandQueue::CopyTileMappings(
     ID3D12Resource *pSrcResource, const D3D12_TILED_RESOURCE_COORDINATE *pSrcRegionStartCoordinate,
     const D3D12_TILE_REGION_SIZE *pRegionSize, D3D12_TILE_MAPPING_FLAGS Flags)
 {
-  D3D12NOTIMP("Tiled Resources");
-  m_pReal->CopyTileMappings(Unwrap(pDstResource), pDstRegionStartCoordinate, Unwrap(pSrcResource),
-                            pSrcRegionStartCoordinate, pRegionSize, Flags);
+  RDCWARN("CopyTileMappings() doesn't work yet lol");
+  SERIALISE_TIME_CALL(m_pReal->CopyTileMappings(Unwrap(pDstResource), pDstRegionStartCoordinate,
+                           Unwrap(pSrcResource), pSrcRegionStartCoordinate, pRegionSize, Flags));
 }
 
 template <typename SerialiserType>

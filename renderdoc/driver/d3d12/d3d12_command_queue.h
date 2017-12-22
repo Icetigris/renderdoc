@@ -93,6 +93,9 @@ class WrappedID3D12CommandQueue : public ID3D12CommandQueue,
 
   vector<D3D12ResourceRecord *> m_CmdListRecords;
 
+  // tiled/reserved resources referenced by this command queue
+  set<ReservedResource *> m_ReservedResources;
+
   // D3D12 guarantees that queues are thread-safe
   Threading::CriticalSection m_Lock;
 
